@@ -675,7 +675,9 @@ def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], 
 
     # track last_fetch_ids to handle insights with the same timestamp
     last_fetch_ids: List[str] = cast(List[str], last_run.get('last_fetch_ids', []))
+    last_fetch_signal_ids: List[str] = cast(List[str], last_run.get('last_fetch_signal_ids', []))
     current_fetch_ids: List[str] = []
+    current_fetch_signal_ids: List[str] = []
 
     # Handle first fetch time
     if last_fetch is None:
@@ -687,34 +689,36 @@ def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], 
 
     # for type checking, making sure that latest_created_time is int
     latest_created_time = cast(int, last_fetch)
+    last_fetch_created_time = latest_created_time 
 
     # Initialize an empty list of incidents to return
     # Each incident is a dict with a string as a key
     incidents: List[Dict[str, Any]] = []
 
     # set query values that do not change with pagination
-    q = 'created:>={}'.format(insight_timestamp_to_created_format(latest_created_time))
-    if fetch_query:
-        q += ' ' + fetch_query
-    else:
-        q = q + ' status:in("new", "inprogress")'
-
+    q = 'created:>={}'.format(insight_timestamp_to_created_format(last_fetch_created_time))
     offset = 0
     query = {}
-    query['q'] = q
+    if fetch_query:
+        query['q'] = q + ' ' + fetch_query
+    else:
+        query['q'] = q + ' status:in("new", "inprogress")'
     query['limit'] = str(max_results)
     if record_summary_fields:
         query['recordSummaryFields'] = record_summary_fields
     incidents = []
     hasNextPage = True
     instance_endpoint = client.get_extra_params()['instance_endpoint']
-    while hasNextPage:
+    signal_ids=[]
+    counter=0
+    # Retrieve Insights
+    while hasNextPage and counter<2:
 
         # only query parameter that changes loop to loop is the offset
         query['offset'] = str(offset)
         resp_json = client.req('GET', 'sec/v1/insights', query)
         for a in resp_json.get('objects'):
-
+            counter +=1
             # If no created_time set is as epoch (0). We use time in ms so we must
             # convert it from the API response
             insight_timestamp = a.get('created')
@@ -741,6 +745,7 @@ def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], 
                 signals = a.get('signals')
                 for signal in signals:
                     signal_id = signal['id']
+                    signal_ids.append(signal_id)
                     signal['sumoUrl'] = craft_sumo_url(instance_endpoint, 'signal', signal_id)
 
                 incidents.append({
@@ -763,6 +768,36 @@ def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], 
         else:
             offset = len(incidents)
 
+    # Retrieve Signals associated with the insights
+    query={}
+    i=0
+    batch_size=10
+    signal_incidents = []
+    while i<len(signal_ids):
+        signal_list_str = ','.join([f'"{x}"' for x in signal_ids[i:i+batch_size]])
+        query['q']=f'id:in({signal_list_str})'
+        resp_json = client.req('GET', 'sec/v1/signals', query)
+        for a in resp_json.get('objects'):
+            signal_id = a.get('id')
+            # add sumoUrl to signal:
+            a['sumoUrl'] = craft_sumo_url(instance_endpoint, 'signal', signal_id)
+            # field inserted for classifier
+            a['readableId'] =  "SIGNAL-"+signal_id
+            signal_incidents.append({
+                'name': a.get('name', 'No name')+' - ' + signal_id,
+                'occurred': timestamp_to_datestring(incident_created_time_ms),
+                'details': a.get('description'),
+                'severity': translate_severity(a.get('severity')),
+                'rawJSON': json.dumps(a)
+            })
+            current_fetch_ids.append(signal_id)
+        i+=batch_size
+        
+    # Append signals to the incidents list:
+    #incidents.extend(signal_incidents)
+    #del(signal_incidents)
+    signal_incidents.extend(incidents)
+
     # Save the next_run as a dict with the last_fetch and last_fetch_ids keys to be stored
     next_run = cast(
         Dict[str, Any],
@@ -771,7 +806,7 @@ def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], 
             'last_fetch_ids': current_fetch_ids if len(current_fetch_ids) > 0 else last_fetch_ids
         }
     )
-    return next_run, incidents
+    return next_run, signal_incidents
 
 
 ''' MAIN FUNCTION '''
