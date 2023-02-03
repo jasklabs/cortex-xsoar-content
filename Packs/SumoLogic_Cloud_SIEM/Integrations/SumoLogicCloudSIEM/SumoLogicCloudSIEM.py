@@ -662,6 +662,17 @@ def threat_intel_update_source(client: Client, args: Dict[str, Any]) -> CommandR
         outputs=result
     )
 
+def cleanup_records(signal:"Sumo Signal Object") -> "Object":
+    '''
+    Function to clean up all "bro" fields of the records under a Signal object
+    '''
+    for rec in signal['allRecords']:
+        field_names = list(rec.keys())
+        for field_name in field_names:
+            if (field_name.startswith('bro') and len(rec.get(field_name))==0):
+                rec.pop(field_name,None)
+    return signal
+
 
 def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], first_fetch_time: Optional[int],
                     fetch_query: Optional[str], record_summary_fields: Optional[str]) -> Tuple[Dict[str, int], List[dict]]:
@@ -671,13 +682,12 @@ def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], 
 
     # Get the last fetch time, if exists
     # last_run is a dict with a single key, called last_fetch
+    demisto.debug(f"Sumo Logic Integration last run: {last_run}")
     last_fetch = last_run.get('last_fetch', None)
 
     # track last_fetch_ids to handle insights with the same timestamp
     last_fetch_ids: List[str] = cast(List[str], last_run.get('last_fetch_ids', []))
-    last_fetch_signal_ids: List[str] = cast(List[str], last_run.get('last_fetch_signal_ids', []))
     current_fetch_ids: List[str] = []
-    current_fetch_signal_ids: List[str] = []
 
     # Handle first fetch time
     if last_fetch is None:
@@ -718,13 +728,12 @@ def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], 
         query['offset'] = str(offset)
         resp_json = client.req('GET', 'sec/v1/insights', query)
         for a in resp_json.get('objects'):
-            counter +=1
             # If no created_time set is as epoch (0). We use time in ms so we must
             # convert it from the API response
             insight_timestamp = a.get('created')
             insight_id = a.get('id')
             insight_readableid = a.get('readableId')
-            # add sumoUrl to signal:
+            # add sumoUrl to raw insight:
             a['sumoUrl'] = craft_sumo_url(instance_endpoint, 'insight', insight_id)
 
             if insight_id and insight_timestamp and insight_id not in last_fetch_ids:
@@ -740,13 +749,14 @@ def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], 
                 if last_fetch:
                     if incident_created_time < last_fetch:
                         continue
-                # add sumoUrl to raw insight:
 
                 signals = a.get('signals')
                 for signal in signals:
+                    # add sumoUrl to signal:
                     signal_id = signal['id']
                     signal_ids.append(signal_id)
                     signal['sumoUrl'] = craft_sumo_url(instance_endpoint, 'signal', signal_id)
+                    cleanup_records(signal)
 
                 incidents.append({
                     'name': a.get('name', 'No name') + ' - ' + insight_readableid,
@@ -760,6 +770,9 @@ def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], 
                 # Update last run and add incident if the incident is newer than last fetch
                 if incident_created_time > latest_created_time:
                     latest_created_time = incident_created_time
+            counter +=1
+            if (counter>=2):
+               break 
 
         total = resp_json.get('total')
 
@@ -783,6 +796,7 @@ def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], 
             a['sumoUrl'] = craft_sumo_url(instance_endpoint, 'signal', signal_id)
             # field inserted for classifier
             a['readableId'] =  "SIGNAL-"+signal_id
+            cleanup_records(a)
             signal_incidents.append({
                 'name': a.get('name', 'No name')+' - ' + signal_id,
                 'occurred': timestamp_to_datestring(incident_created_time_ms),
@@ -790,13 +804,11 @@ def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], 
                 'severity': translate_severity(a.get('severity')),
                 'rawJSON': json.dumps(a)
             })
-            current_fetch_ids.append(signal_id)
         i+=batch_size
         
-    # Append signals to the incidents list:
-    #incidents.extend(signal_incidents)
-    #del(signal_incidents)
+    # Append incidents to the signal list so the signals will be created first:
     signal_incidents.extend(incidents)
+    del(incidents)
 
     # Save the next_run as a dict with the last_fetch and last_fetch_ids keys to be stored
     next_run = cast(
@@ -901,6 +913,8 @@ def main() -> None:
 
             # saves next_run for the time fetch-incidents is invoked
             demisto.setLastRun(next_run)
+            check_next_run= demisto.getLastRun()
+
             # fetch-incidents calls ``demisto.incidents()`` to provide the list
             # of incidents to create
             demisto.incidents(incidents)
