@@ -53,6 +53,12 @@ configuration:
   defaultvalue: 1 day
   type: 0
   required: false
+- additionalinfo: Pull Sumo Logic signals associated with detected Sumo Logic Insights as XSOAR incidents
+  defaultvalue: "false"
+  display: Pull associated Sumo Logic Signals as Incidents
+  name: pull_signals
+  required: false
+  type: 8
 - display: Override Record Summary Fields
   name: record_summary_fields
   defaultvalue: "action,description,device_hostname,device_ip,dstDevice_hostname,dstDevice_ip,email_sender,file_basename,file_hash_md5,file_hash_sha1,file_hash_sha256,srcDevice_hostname,srcDevice_ip,threat_name,threat_category,threat_identifier,user_username,threat_url,listMatches"
@@ -800,7 +806,7 @@ script:
       description: Server response (True or False).
       type: Boolean
     description: Add a Threat Intel Indicator to an Threat Intel Source.
-  dockerimage: demisto/python3:3.10.9.46807
+  dockerimage: demisto/python3:3.10.10.47713
   isfetch: true
   runonce: false
   subtype: python3

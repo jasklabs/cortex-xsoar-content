@@ -223,6 +223,7 @@ def test_module(client: Client) -> str:
             last_run={},  # getLastRun() gets the last run dict
             first_fetch_time=first_fetch_timestamp,
             fetch_query='',  # defaults to status:in("new", "inprogress")
+            pull_signals=False,
             record_summary_fields=''
         )
         message = 'ok'
@@ -675,7 +676,7 @@ def cleanup_records(signal:"Sumo Signal Object") -> "Object":
 
 
 def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], first_fetch_time: Optional[int],
-                    fetch_query: Optional[str], record_summary_fields: Optional[str]) -> Tuple[Dict[str, int], List[dict]]:
+                    fetch_query: Optional[str], pull_signals: Optional[bool], record_summary_fields: Optional[str]) -> Tuple[Dict[str, int], List[dict]]:
     '''
     Retrieve new incidents periodically based on pre-defined instance parameters
     '''
@@ -781,33 +782,37 @@ def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], 
         else:
             offset = len(incidents)
 
-    # Retrieve Signals associated with the insights
-    query={}
-    i=0
-    batch_size=10
-    signal_incidents = []
-    while i<len(signal_ids):
-        signal_list_str = ','.join([f'"{x}"' for x in signal_ids[i:i+batch_size]])
-        query['q']=f'id:in({signal_list_str})'
-        resp_json = client.req('GET', 'sec/v1/signals', query)
-        for a in resp_json.get('objects'):
-            signal_id = a.get('id')
-            # add sumoUrl to signal:
-            a['sumoUrl'] = craft_sumo_url(instance_endpoint, 'signal', signal_id)
-            # field inserted for classifier
-            a['readableId'] =  "SIGNAL-"+signal_id
-            cleanup_records(a)
-            signal_incidents.append({
-                'name': a.get('name', 'No name')+' - ' + signal_id,
-                'occurred': timestamp_to_datestring(incident_created_time_ms),
-                'details': a.get('description'),
-                'severity': translate_severity(a.get('severity')),
-                'rawJSON': json.dumps(a)
-            })
-        i+=batch_size
-        
-    # Append incidents to the signal list so the signals will be created first:
-    signal_incidents.extend(incidents)
+    final_incidents = []
+    if (pull_signals):
+        # Retrieve Signals associated with the insights
+        query={}
+        i=0
+        batch_size=10
+        signal_incidents = []
+        while i<len(signal_ids):
+            signal_list_str = ','.join([f'"{x}"' for x in signal_ids[i:i+batch_size]])
+            query['q']=f'id:in({signal_list_str})'
+            resp_json = client.req('GET', 'sec/v1/signals', query)
+            for a in resp_json.get('objects'):
+                signal_id = a.get('id')
+                # add sumoUrl to signal:
+                a['sumoUrl'] = craft_sumo_url(instance_endpoint, 'signal', signal_id)
+                # field inserted for classifier
+                a['readableId'] =  "SIGNAL-"+signal_id
+                cleanup_records(a)
+                signal_incidents.append({
+                    'name': a.get('name', 'No name')+' - ' + signal_id,
+                    'occurred': timestamp_to_datestring(incident_created_time_ms),
+                    'details': a.get('description'),
+                    'severity': translate_severity(a.get('severity')),
+                    'rawJSON': json.dumps(a)
+                })
+            i+=batch_size
+            
+        # Append incidents to the signal list so the signals will be created first:
+        final_incidents.extend(signal_incidents)
+        del(signal_incidents)
+    final_incidents.extend(incidents)
     del(incidents)
 
     # Save the next_run as a dict with the last_fetch and last_fetch_ids keys to be stored
@@ -818,7 +823,7 @@ def fetch_incidents(client: Client, max_results: int, last_run: Dict[str, int], 
             'last_fetch_ids': current_fetch_ids if len(current_fetch_ids) > 0 else last_fetch_ids
         }
     )
-    return next_run, signal_incidents
+    return next_run, final_incidents
 
 
 ''' MAIN FUNCTION '''
@@ -849,6 +854,7 @@ def main() -> None:
 
     fetch_query = demisto.params().get('fetch_query')
     record_summary_fields = demisto.params().get('record_summary_fields')
+    pull_signals = demisto.params().get('pull_signals')
 
     demisto.debug(f'Command being called is {demisto.command()}')
     try:
@@ -908,6 +914,7 @@ def main() -> None:
                 last_run=demisto.getLastRun(),  # getLastRun() gets the last run dict
                 first_fetch_time=first_fetch_timestamp,
                 fetch_query=fetch_query,
+                pull_signals = pull_signals,
                 record_summary_fields=record_summary_fields
             )
 
