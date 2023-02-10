@@ -6,7 +6,7 @@ comment: "Command to link associated Signal Incidents to the Insight Incident"
 commonfields:
   id: SumoLogicLinkSignalIncidents
   version: -1
-dockerimage: demisto/python3:3.10.9.46807
+dockerimage: demisto/python3:3.10.10.47713
 enabled: true
 name: SumoLogicLinkSignalIncidents
 runas: DBotWeakRole

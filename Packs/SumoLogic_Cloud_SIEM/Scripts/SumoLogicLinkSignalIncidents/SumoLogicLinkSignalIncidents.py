@@ -35,7 +35,6 @@ def link_incidents_command(args: Dict[str, Any]) -> CommandResults:
             cur_incident=None
         else:
             cur_incident = search_raw[0]['Contents']['data'][0]
-
     if cur_incident is not None and cur_incident['rawType'] != 'Sumo Logic Insight':
         result = {'Message': 'Please run this on a valid Sumo Logic Insight incident only'}
     elif cur_incident is not None:
@@ -51,16 +50,21 @@ def link_incidents_command(args: Dict[str, Any]) -> CommandResults:
         print('IDs of associated signals on Sumo Logic side:', signal_sumoids)
         query = ' or '.join([f'alertid={id}' for id in signal_sumoids])
         search_results = demisto.executeCommand("SearchIncidentsV2", {'query': query})
-
         if ('Contents' in search_results[0]):
-            real_search_results = search_results[0].get('Contents')[0]
-            if real_search_results.get('Contents').get('data') is not None:
-                for signal in real_search_results.get('Contents').get('data'):
-                    signal_id = signal.get('id')
-                    if (signal_id is not None):
-                        linked_signal_ids.append(signal_id)
+            content_raw = search_results[0].get('Contents')
+            if (content_raw is not None):
+                real_search_results = content_raw[0]
+                if real_search_results.get('Contents').get('data') is not None:
+                    for signal in real_search_results.get('Contents').get('data'):
+                        signal_id = signal.get('id')
+                        if (signal_id is not None):
+                            linked_signal_ids.append(signal_id)
+                else:
+                    print('Incorrect path')
             else:
-                print('Incorrect path')
+                print(search_results)
+                result = {'message': 'Cannot find any Signal Incident to link'}
+
 
         #print('Current Incident ID:' + cur_incident.get('id'))
 
